@@ -9,9 +9,12 @@ local safeCall = Caps.safeInvoke
 -- Font helper mapping string tokens to PZ UIFont enums
 local function getUIFont(fontToken)
     local f = Config.Fonts[fontToken] or "Small"
-    if f == "Medium" then return UIFont.Medium end
-    if f == "Large" then return UIFont.Large end
-    if f == "Code" then return UIFont.Code end
+    if f == "Medium"     then return UIFont.Medium end
+    if f == "Large"      then return UIFont.Large end
+    if f == "Code"       then return UIFont.Code end
+    if f == "NewSmall"   then return UIFont.NewSmall end
+    if f == "Breadcrumb" then return UIFont.Breadcrumb end
+    if f == "Heading"    then return UIFont.Heading end
     return UIFont.Small
 end
 
@@ -90,49 +93,56 @@ function Block_Header:shouldRender(item)
 end
 
 function Block_Header:measure(item, width)
-    local name = item:getName() or "Unknown Item"
+    local name = safeCall(item, "getName") or "Unknown Item"
     local font = getUIFont("Title")
     local textWidth = getTextManager():MeasureStringX(font, name)
     -- Padding (16*2) + Icon Space (48) + Name
     local preferredWidth = textWidth + 32 + 48
-    return 48, preferredWidth
+    -- Must match render() height: separator at y+48, so block consumes 54.
+    return 54, preferredWidth
 end
 
 function Block_Header:render(item, x, y, width, renderQueue)
-    local name = item:getName() or "Unknown Item"
-    local category = item:getDisplayCategory() or "Item"
-    
+    local name = safeCall(item, "getName") or "Unknown Item"
+    local category = safeCall(item, "getDisplayCategory") or "Item"
+
     -- Category fallback translation from config
-    local rawCategory = item:getCategory()
+    local rawCategory = safeCall(item, "getCategory")
     if rawCategory and Config.CategoryNames[rawCategory] then
         category = Config.CategoryNames[rawCategory]
     end
-    
+
     local weight = Caps.getWeight(item)
     local weightText = string.format("Weight: %.2f", weight)
-    
+
     -- Fetch rarity color from item mod data or default to Common
     local rarity = "Common"
     local modData = safeCall(item, "getModData")
     if modData and type(modData.AttachmentSystem) == "table" then
         rarity = modData.AttachmentSystem.displayRarity or modData.AttachmentSystem.rarity or "Common"
-    elseif safeCall(item, "getRarity") then
-        rarity = safeCall(item, "getRarity")
+    else
+        local r = safeCall(item, "getRarity")
+        if r then rarity = r end
     end
     local nameColor = Config.RarityColors[rarity] or Config.Colors.TextHero
-    
-    -- Icon retrieval & color tint
-    local tex = item:getTex()
+
+    -- Icon retrieval & color tint (fully safe chain)
+    local tex = safeCall(item, "getTex")
     local iconR, iconG, iconB = 1.0, 1.0, 1.0
-    if item:getVisual() and instanceof(item, "Clothing") and item:getClothingItem() then
-        local tint = item:getVisual():getTint(item:getClothingItem())
-        if tint then
-            iconR = tint:getRedFloat()
-            iconG = tint:getGreenFloat()
-            iconB = tint:getBlueFloat()
+    if instanceof(item, "Clothing") then
+        local visual = safeCall(item, "getVisual")
+        local clothingItem = safeCall(item, "getClothingItem")
+        if visual and clothingItem then
+            -- safeCall forwards clothingItem as the arg: visual:getTint(clothingItem)
+            local tint = safeCall(visual, "getTint", clothingItem)
+            if tint then
+                iconR = safeCall(tint, "getRedFloat") or 1.0
+                iconG = safeCall(tint, "getGreenFloat") or 1.0
+                iconB = safeCall(tint, "getBlueFloat") or 1.0
+            end
         end
     end
-    
+
     -- Draw texture command
     if tex then
         table.insert(renderQueue, {
@@ -148,7 +158,7 @@ function Block_Header:render(item, x, y, width, renderQueue)
             a = 1.0
         })
     end
-    
+
     -- Draw Name command
     table.insert(renderQueue, {
         type = "text",
@@ -161,7 +171,7 @@ function Block_Header:render(item, x, y, width, renderQueue)
         b = nameColor.b,
         a = 1.0
     })
-    
+
     -- Subtitle (Category & Weight)
     local subText = category .. " | " .. weightText
     table.insert(renderQueue, {
@@ -175,7 +185,7 @@ function Block_Header:render(item, x, y, width, renderQueue)
         b = Config.Colors.TextLabel.b,
         a = 1.0
     })
-    
+
     -- Header separator line
     table.insert(renderQueue, {
         type = "rect",
@@ -185,8 +195,8 @@ function Block_Header:render(item, x, y, width, renderQueue)
         h = 1,
         color = Config.Colors.BorderBase
     })
-    
-    return 54 -- height including separator
+
+    return 54 -- height including separator (matches measure)
 end
 
 
@@ -202,15 +212,19 @@ end
 local function getPrimaryStat(item)
     if not item then return nil, nil end
     if instanceof(item, "HandWeapon") then
-        local minDmg = item:getMinDamage()
-        local maxDmg = item:getMaxDamage()
-        return (minDmg + maxDmg) / 2, "DAMAGE"
+        local minDmg = safeCall(item, "getMinDamage")
+        local maxDmg = safeCall(item, "getMaxDamage")
+        if minDmg and maxDmg then
+            return (minDmg + maxDmg) / 2, "DAMAGE"
+        end
+        return nil, nil
     elseif instanceof(item, "Clothing") then
-        local scratch = item:getScratchDefense()
-        local bite = item:getBiteDefense()
+        local scratch = safeCall(item, "getScratchDefense") or 0
+        local bite = safeCall(item, "getBiteDefense") or 0
         return (scratch + bite) / 2, "DEFENSE"
     elseif instanceof(item, "InventoryContainer") then
-        return item:getCapacity(), "CAPACITY"
+        local cap = safeCall(item, "getCapacity")
+        if cap then return cap, "CAPACITY" end
     end
     return nil, nil
 end
@@ -219,20 +233,20 @@ end
 local function getEquippedItem(item, player)
     if not player or not item then return nil end
     if instanceof(item, "HandWeapon") then
-        local pri = player:getPrimaryHandItem()
+        local pri = safeCall(player, "getPrimaryHandItem")
         if pri and instanceof(pri, "HandWeapon") then return pri end
     elseif instanceof(item, "Clothing") then
         -- Find clothing worn in matching body location
-        local loc = item:getBodyLocation()
+        local loc = safeCall(item, "getBodyLocation")
         if loc then
-            local worn = player:getWornItems()
+            local worn = safeCall(player, "getWornItems")
             if worn then
-                local equipped = worn:getItem(loc)
+                local equipped = safeCall(worn, "getItem", loc)
                 if equipped then return equipped end
             end
         end
     elseif instanceof(item, "InventoryContainer") then
-        local back = player:getClothingItem_Back()
+        local back = safeCall(player, "getClothingItem_Back")
         if back then return back end
     end
     return nil
@@ -244,7 +258,9 @@ function Block_HeroStat:shouldRender(item)
 end
 
 function Block_HeroStat:measure(item, width)
-    return 48, width
+    local val, label = getPrimaryStat(item)
+    if val == nil then return 0, width end
+    return 36, width  -- matches render()'s returned height
 end
 
 function Block_HeroStat:render(item, x, y, width, renderQueue)
@@ -253,7 +269,7 @@ function Block_HeroStat:render(item, x, y, width, renderQueue)
     if val % 1 == 0 then
         valText = string.format("%d", val)
     end
-    
+
     -- Draw Value (Huge text)
     table.insert(renderQueue, {
         type = "text",
@@ -353,8 +369,9 @@ end
 function Block_ProgressBars:render(item, x, y, width, renderQueue)
     local cond = safeCall(item, "getCondition") or 0
     local maxCond = safeCall(item, "getConditionMax") or 1
-    local ratio = cond / math.max(1, maxCond)
-    
+    if maxCond <= 0 then maxCond = 1 end
+    local ratio = cond / maxCond
+
     -- State color selection
     local barColor = Config.Colors.State.Perfect
     if ratio < 0.25 then
@@ -430,27 +447,32 @@ function Block_FluidFlask:shouldRender(item)
 end
 
 function Block_FluidFlask:measure(item, width)
-    return 36, width
+    return 30, width  -- matches render() returned height
 end
 
 function Block_FluidFlask:render(item, x, y, width, renderQueue)
-    local container = item:getFluidContainer()
-    local amount = container:getFluidAmount()
-    local capacity = container:getCapacity()
-    local ratio = amount / math.max(0.01, capacity)
-    
+    local container = safeCall(item, "getFluidContainer")
+    if not container then return 0 end
+
+    local amount = safeCall(container, "getFluidAmount") or 0
+    local capacity = safeCall(container, "getCapacity") or 1
+    if capacity <= 0 then capacity = 0.01 end
+    local ratio = amount / capacity
+
     local fluidName = "Empty"
     local fillR, fillG, fillB = 0.3, 0.3, 0.3
-    
-    if not container:isEmpty() then
-        local fluid = container:getPrimaryFluid()
+
+    local isEmpty = safeCall(container, "isEmpty")
+    if isEmpty == nil then isEmpty = true end
+    if not isEmpty then
+        local fluid = safeCall(container, "getPrimaryFluid")
         if fluid then
-            fluidName = fluid:getDisplayName() or "Unknown Liquid"
-            local color = fluid:getColor()
+            fluidName = safeCall(fluid, "getDisplayName") or "Unknown Liquid"
+            local color = safeCall(fluid, "getColor")
             if color then
-                fillR = color:getRedFloat()
-                fillG = color:getGreenFloat()
-                fillB = color:getBlueFloat()
+                fillR = safeCall(color, "getRedFloat") or 0.3
+                fillG = safeCall(color, "getGreenFloat") or 0.3
+                fillB = safeCall(color, "getBlueFloat") or 0.3
             end
         end
     end
@@ -529,25 +551,36 @@ function Layout.createSocketsBlock()
 end
 
 function Block_Sockets:shouldRender(item)
-    return item and instanceof(item, "HandWeapon")
+    if not (item and instanceof(item, "HandWeapon")) then return false end
+    local partMethods = { "getScope", "getSling", "getCanon", "getClip", "getRecoilpad", "getStock" }
+    for _, m in ipairs(partMethods) do
+        if safeCall(item, m) then return true end
+    end
+    return false
 end
 
 function Block_Sockets:measure(item, width)
-    return 44, width
+    return 36, width  -- slot height (28) + top padding (8); single-row case
 end
 
 function Block_Sockets:render(item, x, y, width, renderQueue)
-    -- Standard slots on B42/B41 weapons
+    -- All standard attachment slots on B42/B41 weapons
     local partMethods = { "getScope", "getSling", "getCanon", "getClip", "getRecoilpad", "getStock" }
     local activeParts = {}
-    
+
     for _, method in ipairs(partMethods) do
         local part = safeCall(item, method)
         if part then
-            table.insert(activeParts, { name = part:getName(), tex = part:getTex() })
+            table.insert(activeParts, {
+                name = safeCall(part, "getName") or "",
+                tex = safeCall(part, "getTex")
+            })
         end
     end
-    
+
+    -- If weapon has no attachments at all, hide the block
+    if #activeParts == 0 then return 0 end
+
     -- Label
     table.insert(renderQueue, {
         type = "text",
@@ -560,41 +593,44 @@ function Block_Sockets:render(item, x, y, width, renderQueue)
         b = Config.Colors.TextLabel.b,
         a = 1.0
     })
-    
-    -- Draw 4 slots horizontally on the right
+
+    -- Render ALL active parts (not just 4). Slot grid wraps within width.
     local slotSize = 28
     local gap = 4
-    local startX = x + width - (slotSize * 4 + gap * 3)
-    
-    for i = 1, 4 do
-        local slotX = startX + (i - 1) * (slotSize + gap)
-        local part = activeParts[i]
-        
-        -- Draw empty slot with dashed border look (represented by alpha border rect)
+    local labelArea = 60
+    local availableWidth = width - labelArea
+    local slotsPerRow = math.max(1, math.floor((availableWidth + gap) / (slotSize + gap)))
+
+    for i, part in ipairs(activeParts) do
+        local idx = i - 1
+        local row = math.floor(idx / slotsPerRow)
+        local col = idx % slotsPerRow
+        local slotX = x + labelArea + col * (slotSize + gap)
+        local slotY = y + 2 + row * (slotSize + gap)
+
         table.insert(renderQueue, {
             type = "rect_border",
             x = slotX,
-            y = y + 2,
+            y = slotY,
             w = slotSize,
             h = slotSize,
             color = Config.Colors.BorderBase
         })
-        
-        -- Draw attachment icon inside if present
-        if part and part.tex then
+        if part.tex then
             table.insert(renderQueue, {
                 type = "texture",
                 texture = part.tex,
                 x = slotX + 2,
-                y = y + 4,
+                y = slotY + 2,
                 w = slotSize - 4,
                 h = slotSize - 4,
                 r = 1, g = 1, b = 1, a = 1
             })
         end
     end
-    
-    return 32
+
+    local rows = math.ceil(#activeParts / slotsPerRow)
+    return 4 + rows * (slotSize + gap)
 end
 
 
@@ -606,86 +642,94 @@ function Layout.createTagsBlock()
     return setmetatable({}, Block_Tags)
 end
 
-function Block_Tags:shouldRender(item)
-    local modData = safeCall(item, "getModData")
-    if modData and type(modData) == "table" then
-        return true
-    end
-    
-    if Caps.supportsTags(item) then
-        local hasTags = false
-        Caps.iterateTags(safeCall(item, "getTags"), function() hasTags = true end)
-        return hasTags
-    end
-    
-    return false
-end
-
-function Block_Tags:measure(item, width)
-    -- Tags block wraps, we return a base height of 24, dynamically calculated during render
-    return 24, width
-end
-
-function Block_Tags:render(item, x, y, width, renderQueue)
-    local drawY = y
+-- Shared tag-list builder. Returns a list of { name = string, kind = string }.
+-- Used by BOTH Block_Tags:measure and Block_Tags:render so they measure the
+-- same strings (display names, "#" prefixed java tags) and agree on row count.
+local function buildTagList(item)
     local tagList = {}
-    
-    -- Extract tags from custom attachment system mod data first
+
     local modData = safeCall(item, "getModData")
     if modData and type(modData.AttachmentSystem) == "table" and modData.AttachmentSystem.visibleTags then
-        local tags = modData.AttachmentSystem.visibleTags
         local tagsDef = ZFlexTooltip.TagsDef or {}
-        
-        for _, tagKey in ipairs(tags) do
-            local tagDef = tagsDef[tagKey]
+        for _, tagKey in ipairs(modData.AttachmentSystem.visibleTags) do
             local displayName = tagKey
             local kind = "neutral"
-            
-            -- Look up definitions from attachment system config if loaded
             if AttachmentSystem and AttachmentSystem.Tags and AttachmentSystem.Tags.get then
                 local def = AttachmentSystem.Tags.get(tagKey)
                 if def then
-                    displayName = AttachmentSystem.Tags.display(tagKey)
+                    displayName = AttachmentSystem.Tags.display(tagKey) or tagKey
                     kind = def.kind or "neutral"
                 end
             end
-            
             table.insert(tagList, { name = displayName, kind = kind })
         end
     end
-    
-    -- Extract standard Java tags using Capability API
+
     if #tagList == 0 and Caps.supportsTags(item) then
         Caps.iterateTags(safeCall(item, "getTags"), function(tag)
             table.insert(tagList, { name = "#" .. tostring(tag), kind = "neutral" })
         end)
     end
-    
-    -- If no tags found, exit height 0
+
+    return tagList
+end
+
+-- Shared wrap math. Returns total height for a tag list at the given blockWidth.
+-- rowHeight=16, gap=4. render()'s arithmetic sums identically: rows*(rowHeight+4).
+local function computeTagHeight(tagList, blockWidth)
+    if not tagList or #tagList == 0 then return 0 end
+    local font = getUIFont("Text")
+    local badgeX = 0          -- relative to block left edge
+    local rows = 1
+    for _, tag in ipairs(tagList) do
+        local strWidth = getTextManager():MeasureStringX(font, tag.name)
+        local badgeWidth = strWidth + 10
+        if badgeX + badgeWidth > blockWidth then
+            badgeX = 0        -- wrap: next badge starts a new row
+            rows = rows + 1
+        end
+        badgeX = badgeX + badgeWidth + 4
+    end
+    local rowHeight = 16
+    return rows * (rowHeight + 4)
+end
+
+function Block_Tags:shouldRender(item)
+    local tagList = buildTagList(item)
+    return #tagList > 0
+end
+
+function Block_Tags:measure(item, width)
+    local tagList = buildTagList(item)
+    return computeTagHeight(tagList, width), width
+end
+
+function Block_Tags:render(item, x, y, width, renderQueue)
+    local tagList = buildTagList(item)
     if #tagList == 0 then return 0 end
-    
-    -- Render badge capsules
+
+    -- Render badge capsules. Wrap math MUST mirror computeTagHeight exactly.
+    local font = getUIFont("Text")
     local badgeX = x
     local badgeY = y
     local rowHeight = 16
     local totalHeight = 16
-    local font = getUIFont("Text")
-    
+
     for _, tag in ipairs(tagList) do
         local strWidth = getTextManager():MeasureStringX(font, tag.name)
         local badgeWidth = strWidth + 10
-        
+
         -- Wrap row
         if badgeX + badgeWidth > x + width then
             badgeX = x
             badgeY = badgeY + rowHeight + 4
             totalHeight = totalHeight + rowHeight + 4
         end
-        
+
         -- Style badges
         local bgR, bgG, bgB = 0.15, 0.16, 0.18
         local textR, textG, textB = 0.8, 0.8, 0.8
-        
+
         if tag.kind == "good" then
             bgR, bgG, bgB = 0.1, 0.35, 0.1
             textR, textG, textB = Config.Colors.State.Perfect.r, Config.Colors.State.Perfect.g, Config.Colors.State.Perfect.b
@@ -696,7 +740,7 @@ function Block_Tags:render(item, x, y, width, renderQueue)
             bgR, bgG, bgB = 0.1, 0.2, 0.4
             textR, textG, textB = 0.4, 0.7, 1.0
         end
-        
+
         -- Draw capsule background
         table.insert(renderQueue, {
             type = "rect",
@@ -714,7 +758,7 @@ function Block_Tags:render(item, x, y, width, renderQueue)
             h = 14,
             color = { r = bgR * 1.5, g = bgG * 1.5, b = bgB * 1.5, a = 0.5 }
         })
-        
+
         -- Draw badge text
         table.insert(renderQueue, {
             type = "text",
@@ -727,82 +771,15 @@ function Block_Tags:render(item, x, y, width, renderQueue)
             b = textB,
             a = 1.0
         })
-        
+
         badgeX = badgeX + badgeWidth + 4
     end
-    
+
     return totalHeight + 4
 end
 
 
--- BLOCK 7: LEGACY MOD (Render third-party draw calls elegantly)
-local Block_LegacyMod = {}
-Block_LegacyMod.__index = Block_LegacyMod
-
-function Layout.createLegacyModBlock()
-    return setmetatable({}, Block_LegacyMod)
-end
-
-function Block_LegacyMod:shouldRender(item)
-    return ZFlexTooltip.CapturedDrawCalls and #ZFlexTooltip.CapturedDrawCalls > 0
-end
-
-function Block_LegacyMod:measure(item, width)
-    local calls = ZFlexTooltip.CapturedDrawCalls or {}
-    local lineCount = 0
-    local maxW = width
-    local font = getUIFont("Text")
-    
-    for _, call in ipairs(calls) do
-        if call.textLine then
-            lineCount = lineCount + 1
-            local textW = getTextManager():MeasureStringX(font, call.textLine)
-            maxW = math.max(maxW, textW + 32)
-        end
-    end
-    
-    -- Separator(1) + margin(6) + lines * spacing(13) + margin(4)
-    local totalH = 1 + 6 + (lineCount * 13) + 4
-    return totalH, maxW
-end
-
-function Block_LegacyMod:render(item, x, y, width, renderQueue)
-    local calls = ZFlexTooltip.CapturedDrawCalls or {}
-    local textLineCount = 0
-    local spacing = 13
-    local font = getUIFont("Text")
-    
-    -- Draw separator above legacy mods section
-    table.insert(renderQueue, {
-        type = "rect",
-        x = x,
-        y = y,
-        w = width,
-        h = 1,
-        color = Config.Colors.BorderBase
-    })
-    
-    y = y + 6
-    
-    for _, call in ipairs(calls) do
-        if call.textLine then
-            table.insert(renderQueue, {
-                type = "text",
-                text = call.textLine,
-                x = x + 4,
-                y = y + textLineCount * spacing,
-                font = font,
-                r = call.color.r,
-                g = call.color.g,
-                b = call.color.b,
-                a = call.color.a
-            })
-            textLineCount = textLineCount + 1
-        end
-    end
-    
-    return textLineCount * spacing + 10
-end-- BLOCK 7.5: ATTACHMENT SYSTEM (Modular attachments display)
+-- BLOCK 7: ATTACHMENT SYSTEM (Modular attachments display)
 local Block_AttachmentSystem = {}
 Block_AttachmentSystem.__index = Block_AttachmentSystem
 
@@ -815,11 +792,15 @@ function Block_AttachmentSystem:shouldRender(item)
         return false
     end
     local lines = AttachmentSystem.Tooltip.linesForItem(item)
+    self._cachedLines = lines  -- reused by render() to halve Java-bridge calls
     return lines and #lines > 0
 end
 
 function Block_AttachmentSystem:measure(item, width)
-    local lines = AttachmentSystem.Tooltip.linesForItem(item)
+    local lines = self._cachedLines
+    if not lines and AttachmentSystem and AttachmentSystem.Tooltip and AttachmentSystem.Tooltip.linesForItem then
+        lines = AttachmentSystem.Tooltip.linesForItem(item)
+    end
     if not lines or #lines == 0 then return 0, width end
     
     local lineCount = 0
@@ -855,13 +836,16 @@ function Block_AttachmentSystem:measure(item, width)
 end
 
 function Block_AttachmentSystem:render(item, x, y, width, renderQueue)
-    local lines = AttachmentSystem.Tooltip.linesForItem(item)
+    local lines = self._cachedLines
+    if not lines and AttachmentSystem and AttachmentSystem.Tooltip and AttachmentSystem.Tooltip.linesForItem then
+        lines = AttachmentSystem.Tooltip.linesForItem(item)
+    end
     if not lines or #lines == 0 then return 0 end
-    
+
     local spacing = 15
     local fontText = getUIFont("Text")
     local fontValue = getUIFont("Value")
-    
+
     -- Top line separator to visually isolate this section
     table.insert(renderQueue, {
         type = "rect",
@@ -1085,6 +1069,8 @@ function Block_Footer:render(item, x, y, width, renderQueue)
     
     return 14
 end
+
+-- BLOCK 9: CLOTHING STATS (Insulation/Wind/Water/Speed modifiers)
 local Block_ClothingStats = {}
 Block_ClothingStats.__index = Block_ClothingStats
 
@@ -1098,11 +1084,13 @@ end
 
 function Block_ClothingStats:measure(item, width)
     local h = 0
-    if item:getInsulation() > 0 then h = h + 18 end
-    if item:getWindresistance() > 0 then h = h + 18 end
-    if item:getWaterResistance() > 0 then h = h + 18 end
-    if item:getRunSpeedModifier() ~= 1.0 then h = h + 18 end
-    if item:getCombatSpeedModifier() ~= 1.0 then h = h + 18 end
+    if (safeCall(item, "getInsulation") or 0) > 0 then h = h + 18 end
+    if (safeCall(item, "getWindresistance") or 0) > 0 then h = h + 18 end
+    if (safeCall(item, "getWaterResistance") or 0) > 0 then h = h + 18 end
+    local runMod = safeCall(item, "getRunSpeedModifier")
+    if runMod and runMod ~= 1.0 then h = h + 18 end
+    local combatMod = safeCall(item, "getCombatSpeedModifier")
+    if combatMod and combatMod ~= 1.0 then h = h + 18 end
     if h > 0 then h = h + 8 end -- padding
     return h, width
 end
@@ -1122,23 +1110,28 @@ function Block_ClothingStats:render(item, x, y, width, renderQueue)
         currentY = currentY + 18
     end
 
-    if item:getInsulation() > 0 then
-        addStat("Insulation", string.format("%.2f", item:getInsulation()), 0.4, 0.8, 0.4)
+    local insulation = safeCall(item, "getInsulation") or 0
+    if insulation > 0 then
+        addStat("Insulation", string.format("%.2f", insulation), 0.4, 0.8, 0.4)
     end
-    if item:getWindresistance() > 0 then
-        addStat("Wind Resist", string.format("%.2f", item:getWindresistance()), 0.4, 0.8, 0.8)
+    local wind = safeCall(item, "getWindresistance") or 0
+    if wind > 0 then
+        addStat("Wind Resist", string.format("%.2f", wind), 0.4, 0.8, 0.8)
     end
-    if item:getWaterResistance() > 0 then
-        addStat("Water Resist", string.format("%.2f", item:getWaterResistance()), 0.3, 0.5, 0.9)
+    local water = safeCall(item, "getWaterResistance") or 0
+    if water > 0 then
+        addStat("Water Resist", string.format("%.2f", water), 0.3, 0.5, 0.9)
     end
-    if item:getRunSpeedModifier() ~= 1.0 then
-        local mod = (item:getRunSpeedModifier() - 1.0) * 100
+    local runMod = safeCall(item, "getRunSpeedModifier")
+    if runMod and runMod ~= 1.0 then
+        local mod = (runMod - 1.0) * 100
         addStat("Run Speed", string.format("%+.0f%%", mod), mod < 0 and 0.8 or 0.4, mod < 0 and 0.3 or 0.8, 0.3)
     end
-    if item:getCombatSpeedModifier() ~= 1.0 then
-        local mod = (item:getCombatSpeedModifier() - 1.0) * 100
+    local combatMod = safeCall(item, "getCombatSpeedModifier")
+    if combatMod and combatMod ~= 1.0 then
+        local mod = (combatMod - 1.0) * 100
         addStat("Combat Speed", string.format("%+.0f%%", mod), mod < 0 and 0.8 or 0.4, mod < 0 and 0.3 or 0.8, 0.3)
     end
-    
+
     return currentY - y
 end
