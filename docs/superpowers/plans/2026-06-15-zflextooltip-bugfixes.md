@@ -10,6 +10,18 @@
 
 **Environment note:** No `lua`/`luacheck`/`busted` locally. The TDD "run test" steps are replaced with **static verification commands** (grep for absence of bad patterns, count of calls). Final acceptance is an in-game load test described in Task 6.
 
+**Review history:** This plan passed two review passes:
+1. **Self-review** (writing-plans checklist): added Task 1 Step 5b (C3 reentrancy fix), renumbered Task 2 steps.
+2. **Parallel agent review** (3 Explore agents): fixed 4 BLOCKERs and ~12 warnings —
+   - `safeGet` helper dropped method args → removed, use plain `safeCall` (Task 2 Step 1).
+   - `getWeightThen()` is not a real PZ B42 API → replaced with `getInventory():getCapacityWeight()` (Task 3 Step 1).
+   - README factory-wrap example silently dropped the footer → rewritten as a composite-block pattern (Task 5 Step 2).
+   - 9 broken `findstr` commands (`\|` is not an operator on Windows; multi-word strings need `/c:`) → all fixed.
+   - Tags measure/render measured different tag-name strings → unified behind shared `buildTagList` + `computeTagHeight` helpers (Task 2 Step 7 + 7b).
+   - HeroStat measure(48)≠render(36) omitted from inventory → added as L11, fixed in Task 2 Step 3b.
+   - `getUIFont` not extended for new font tokens → Task 4 Step 4a.
+   - Cross-ref "Task 2 Step 7" → "Task 2 Step 6" corrected.
+
 **File ownership matrix (no conflicts):**
 - Task 1 → `ZFlexTooltip_Main.lua` only
 - Task 2 → `ZFlexTooltip_Layout.lua` only (the large refactor)
@@ -40,6 +52,7 @@
 | L8 | 🟠 | style | Layout:805 | Merged `end--` comment |
 | L9 | 🟠 | style | Layout headers | Inconsistent block numbering |
 | L10 | 🟠 | perf | Layout:817,858 | Double `linesForItem` call |
+| L11 | 🟠 | bug | Layout:246-248,289 | HeroStat measure(48) ≠ render(36) (found during plan review; same class as L2/L6/L12) |
 | L12 | 🟠 | bug | Layout:536,597 | Sockets measure(44) ≠ render(32) |
 | Cap2 | 🟠 | bug | Capabilities:109-116 | Container weight ignores contents |
 | Cap3 | 🟡 | bug | Capabilities:86-88 | `supportsSockets` too narrow |
@@ -289,8 +302,9 @@ Expected: **no output** (the shadowing line is gone).
 
 Run:
 ```
-findstr /n "CapturedDrawCalls\|createLegacyModBlock" 42\media\lua\client\ZFlexTooltip\ZFlexTooltip_Main.lua
+findstr /n "CapturedDrawCalls createLegacyModBlock" 42\media\lua\client\ZFlexTooltip\ZFlexTooltip_Main.lua
 ```
+(Note: Windows `findstr` treats space-separated tokens as OR alternation. Do NOT use `\|` — it is not a `findstr` operator and would match only the literal backslash-pipe string, producing false confidence.)
 Expected: **no output**.
 
 - [ ] **Step 8: Commit**
@@ -318,24 +332,22 @@ git commit -m "fix(main): gate per-frame prints, fix w/h shadowing, dedupe clamp
 
 **Note on the ClothingStats block:** `ZFlexTooltip_Layout.lua` contains exactly ONE `Block_ClothingStats` definition (lines ~1088-1145). It is the canonical definition and stays in this file. The duplicate is the standalone `ClothingStats.lua` in the repo root, which Task 5 deletes. Do NOT delete the block from Layout.lua.
 
-- [ ] **Step 1: Add a Caps helper for safe method chains (prep for L1)**
+- [ ] **Step 1: Prep for L1 — confirm `safeCall` already handles method-with-arg chains**
 
-Near the top of `ZFlexTooltip_Layout.lua`, after `local safeCall = Caps.safeInvoke` (line 8), add two helpers used across blocks:
+No new helper is needed. The existing `Caps.safeInvoke(obj, method, ...)` (Capabilities.lua lines 11-16) already forwards trailing args correctly: `obj[method](obj, ...)`. So `safeCall(visual, "getTint", clothingItem)` becomes `visual.getTint(visual, clothingItem)` — exactly what B42's `ClothingVisual:getTint(ClothingItem)` requires.
 
+**Do NOT** introduce a recursive `safeGet(obj, first, ...)` helper. An earlier draft of this plan proposed one, but it had two bugs: (a) the intermediate call `obj[first](obj)` dropped the trailing `...`, and (b) the recursion re-interpreted a payload arg (the `clothingItem` object) as the next method *name*, guaranteeing a nil return. Review caught both. Use plain `safeCall` everywhere — it already takes varargs.
+
+Confirm by reading `ZFlexTooltip_Capabilities.lua:11-16`:
 ```lua
--- Safely read a chain of method results: safeGet(item, "getVisual", "getTint", clothingItem)
--- Returns nil if any link is missing/nil. Never throws.
-local function safeGet(obj, first, ...)
-    if obj == nil then return nil end
-    if not Caps.hasMethod(obj, first) then return nil end
-    local val = obj[first](obj)
-    if select("#", ...) == 0 then
-        return val
+function Caps.safeInvoke(obj, method, ...)
+    if Caps.hasMethod(obj, method) then
+        return obj[method](obj, ...)   -- forwards trailing args correctly
     end
-    return safeGet(val, ...)
+    return nil
 end
-Layout._safeGet = safeGet  -- exposed for blocks defined elsewhere
 ```
+No code change in this step. Proceed to Step 2.
 
 - [ ] **Step 2: Make Block_Header crash-proof (L1, L2)**
 
@@ -396,7 +408,8 @@ function Block_Header:render(item, x, y, width, renderQueue)
         local visual = safeCall(item, "getVisual")
         local clothingItem = safeCall(item, "getClothingItem")
         if visual and clothingItem then
-            local tint = safeGet(visual, "getTint", clothingItem)
+            -- safeCall forwards clothingItem as the arg: visual:getTint(clothingItem)
+            local tint = safeCall(visual, "getTint", clothingItem)
             if tint then
                 iconR = safeCall(tint, "getRedFloat") or 1.0
                 iconG = safeCall(tint, "getGreenFloat") or 1.0
@@ -510,6 +523,26 @@ local function getEquippedItem(item, player)
     return nil
 end
 ```
+
+- [ ] **Step 3b: Align Block_HeroStat measure/render heights (L2-adjacent, found in review)**
+
+Review found `Block_HeroStat:measure` returns `48` while `Block_HeroStat:render` returns `36` (Layout.lua lines 246-248 vs 289/326) — a measure/render mismatch of the same kind L2/L6 fix elsewhere, but the original review's defect inventory omitted it. `Block_HeroStat:render` calls `getPrimaryStat` (now safe-call-ified by Step 3), so the block already benefits from the crash-proof refactor; only the height needs aligning.
+
+Replace `Block_HeroStat:measure` (Layout.lua lines 246-248):
+```lua
+function Block_HeroStat:measure(item, width)
+    return 48, width
+end
+```
+with:
+```lua
+function Block_HeroStat:measure(item, width)
+    local val, label = getPrimaryStat(item)
+    if val == nil then return 0, width end
+    return 36, width  -- matches render()'s returned height
+end
+```
+This makes Pass 1 (measure) and Pass 2 (render) agree, and avoids reserving 48px when the block will not render at all.
 
 - [ ] **Step 4: Make Block_ProgressBars crash-proof + cache condition (L1, L7)**
 
@@ -739,53 +772,147 @@ function Block_Sockets:shouldRender(item)
 end
 ```
 
-- [ ] **Step 7: Fix Tags measure/render height contract (L6)**
+- [ ] **Step 7: Fix Tags measure/render height contract (L6, plus review-found text-divergence B3)**
 
-Replace `Block_Tags:measure` (lines 624-627):
+Review found two compounding bugs in the naive measure fix:
+1. **Text divergence.** `measure` measured raw tag strings (`tagKey`, `tostring(tag)`), but `render` measures **display names** (`AttachmentSystem.Tags.display(tagKey)`, `"#" .. tostring(tag)`). Different strings → different widths → different wrap decisions → measure and render disagree on row count.
+2. **Wrap-math divergence.** `measure`'s badge-X reset logic differed from `render`'s (`badgeX = badgeWidth + 4` vs `badgeX = x` then add).
+
+The only robust fix is to share ONE tag-list builder and ONE wrap-math function between `measure` and `render`. Add these two file-local helpers above `Block_Tags` (after the `getEquippedItem` helper region):
+
+```lua
+-- Shared tag-list builder. Returns a list of { name = string, kind = string }.
+-- Used by BOTH Block_Tags:measure and Block_Tags:render so they measure the
+-- same strings (display names, "#" prefixed java tags) and agree on row count.
+local function buildTagList(item)
+    local tagList = {}
+
+    local modData = safeCall(item, "getModData")
+    if modData and type(modData.AttachmentSystem) == "table" and modData.AttachmentSystem.visibleTags then
+        local tagsDef = ZFlexTooltip.TagsDef or {}
+        for _, tagKey in ipairs(modData.AttachmentSystem.visibleTags) do
+            local displayName = tagKey
+            local kind = "neutral"
+            if AttachmentSystem and AttachmentSystem.Tags and AttachmentSystem.Tags.get then
+                local def = AttachmentSystem.Tags.get(tagKey)
+                if def then
+                    displayName = AttachmentSystem.Tags.display(tagKey) or tagKey
+                    kind = def.kind or "neutral"
+                end
+            end
+            table.insert(tagList, { name = displayName, kind = kind })
+        end
+    end
+
+    if #tagList == 0 and Caps.supportsTags(item) then
+        Caps.iterateTags(safeCall(item, "getTags"), function(tag)
+            table.insert(tagList, { name = "#" .. tostring(tag), kind = "neutral" })
+        end)
+    end
+
+    return tagList
+end
+
+-- Shared wrap math. Returns (totalHeight, columnX-positions are the caller's job).
+-- `blockWidth` is the content width (already minus padding). rowHeight=16, gap=4.
+local function computeTagHeight(tagList, blockWidth)
+    if #tagList == 0 then return 0 end
+    local font = getUIFont("Text")
+    local badgeX = 0          -- relative to block left edge
+    local rows = 1
+    for _, tag in ipairs(tagList) do
+        local strWidth = getTextManager():MeasureStringX(font, tag.name)
+        local badgeWidth = strWidth + 10
+        if badgeX + badgeWidth > blockWidth then
+            badgeX = 0        -- wrap: next badge starts a new row
+            rows = rows + 1
+        end
+        badgeX = badgeX + badgeWidth + 4
+    end
+    local rowHeight = 16
+    -- render() returns totalHeight+4 where totalHeight starts at 16 and adds
+    -- (rowHeight+4) per wrap. That sums to rows*(rowHeight+4). Match exactly:
+    return rows * (rowHeight + 4)
+end
+```
+
+Replace `Block_Tags:measure` (Layout.lua lines 624-627):
 ```lua
 function Block_Tags:measure(item, width)
     -- Tags block wraps, we return a base height of 24, dynamically calculated during render
     return 24, width
 end
 ```
-with a measure that actually pre-computes the wrapped height. New version:
+with:
 ```lua
 function Block_Tags:measure(item, width)
-    local tagList = {}
-
-    local modData = safeCall(item, "getModData")
-    if modData and type(modData.AttachmentSystem) == "table" and modData.AttachmentSystem.visibleTags then
-        for _, tagKey in ipairs(modData.AttachmentSystem.visibleTags) do
-            table.insert(tagList, tagKey)
-        end
-    end
-
-    if #tagList == 0 and Caps.supportsTags(item) then
-        Caps.iterateTags(safeCall(item, "getTags"), function(tag)
-            table.insert(tagList, tostring(tag))
-        end)
-    end
-
-    if #tagList == 0 then return 0, width end
-
-    -- Replicate render's wrap math to predict height
-    local font = getUIFont("Text")
-    local badgeX = 0
-    local rows = 1
-    for _, name in ipairs(tagList) do
-        local strWidth = getTextManager():MeasureStringX(font, name)
-        local badgeWidth = strWidth + 10
-        if badgeX + badgeWidth > width then
-            badgeX = 0
-            rows = rows + 1
-        end
-        badgeX = badgeX + badgeWidth + 4
-    end
-    local rowHeight = 16
-    return rows * (rowHeight + 4), width
+    local tagList = buildTagList(item)
+    return computeTagHeight(tagList, width), width
 end
 ```
-This makes Pass 1 and Pass 2 agree on the tag block height.
+
+- [ ] **Step 7b: Rewrite Block_Tags:render to use the same shared helpers (L6, B3)**
+
+To guarantee measure and render measure identical text and wrap identically, `render` must call the SAME `buildTagList` and the SAME wrap math. Replace `Block_Tags:render` (Layout.lua lines 629-735) body — keep the badge-drawing visuals, but source `tagList` from the helper and reuse the wrap arithmetic. New version:
+
+```lua
+function Block_Tags:render(item, x, y, width, renderQueue)
+    local tagList = buildTagList(item)
+    if #tagList == 0 then return 0 end
+
+    -- Render badge capsules. Wrap math MUST mirror computeTagHeight exactly.
+    local font = getUIFont("Text")
+    local badgeX = x
+    local badgeY = y
+    local rowHeight = 16
+    local totalHeight = 16
+
+    for _, tag in ipairs(tagList) do
+        local strWidth = getTextManager():MeasureStringX(font, tag.name)
+        local badgeWidth = strWidth + 10
+
+        if badgeX + badgeWidth > x + width then
+            badgeX = x
+            badgeY = badgeY + rowHeight + 4
+            totalHeight = totalHeight + rowHeight + 4
+        end
+
+        -- Style badges by kind
+        local bgR, bgG, bgB = 0.15, 0.16, 0.18
+        local textR, textG, textB = 0.8, 0.8, 0.8
+        if tag.kind == "good" then
+            bgR, bgG, bgB = 0.1, 0.35, 0.1
+            textR, textG, textB = Config.Colors.State.Perfect.r, Config.Colors.State.Perfect.g, Config.Colors.State.Perfect.b
+        elseif tag.kind == "bad" then
+            bgR, bgG, bgB = 0.35, 0.1, 0.1
+            textR, textG, textB = Config.Colors.State.Critical.r, Config.Colors.State.Critical.g, Config.Colors.State.Critical.b
+        elseif tag.kind == "earned" then
+            bgR, bgG, bgB = 0.1, 0.2, 0.4
+            textR, textG, textB = 0.4, 0.7, 1.0
+        end
+
+        table.insert(renderQueue, {
+            type = "rect", x = badgeX, y = badgeY, w = badgeWidth, h = 14,
+            color = { r = bgR, g = bgG, b = bgB, a = 0.8 }
+        })
+        table.insert(renderQueue, {
+            type = "rect_border", x = badgeX, y = badgeY, w = badgeWidth, h = 14,
+            color = { r = bgR * 1.5, g = bgG * 1.5, b = bgB * 1.5, a = 0.5 }
+        })
+        table.insert(renderQueue, {
+            type = "text", text = tag.name, x = badgeX + 5, y = badgeY + 1,
+            font = font, r = textR, g = textG, b = textB, a = 1.0
+        })
+
+        badgeX = badgeX + badgeWidth + 4
+    end
+
+    return totalHeight + 4
+end
+```
+
+Now both passes call `buildTagList` (same strings) and apply the same wrap rule (badge wraps when `badgeX + badgeWidth > width`), so Pass 1 and Pass 2 always agree on the row count. This closes both L6 and the review-found B3 text-divergence.
+
 
 - [ ] **Step 8: Cache AttachmentSystem.linesForItem result (L10)**
 
@@ -898,31 +1025,31 @@ end
 
 Run:
 ```
-findstr /n "Block_LegacyMod\|createLegacyModBlock" 42\media\lua\client\ZFlexTooltip\ZFlexTooltip_Layout.lua
+findstr /n "Block_LegacyMod createLegacyModBlock" 42\media\lua\client\ZFlexTooltip\ZFlexTooltip_Layout.lua
 ```
 Expected: **no output**.
 
 Run:
 ```
-findstr /n "end--" 42\media\lua\client\ZFlexTooltip\ZFlexTooltip_Layout.lua
+findstr /n /c:"end--" 42\media\lua\client\ZFlexTooltip\ZFlexTooltip_Layout.lua
 ```
 Expected: **no output** (the merged comment is fixed).
 
 Run to confirm no naked direct calls remain in block render functions (this is a heuristic — `item:` should now almost always be wrapped):
 ```
-findstr /n "item:getName\|item:getTex\|item:getVisual\|item:getFluidContainer\|item:getInsulation" 42\media\lua\client\ZFlexTooltip\ZFlexTooltip_Layout.lua
+findstr /n "item:getName item:getTex item:getVisual item:getFluidContainer item:getInsulation" 42\media\lua\client\ZFlexTooltip\ZFlexTooltip_Layout.lua
 ```
-Expected: **no output** (all replaced with `safeCall(item, ...)`).
+Expected: **no output** (all replaced with `safeCall(item, ...)`). Note: this is a partial heuristic — it covers only the highest-risk getters; `getDisplayCategory`, `getModData`, `getRarity`, `getClothingItem`, `getCondition`, `getConditionMax`, `getWindresistance`, `getWaterResistance`, `getRunSpeedModifier`, `getCombatSpeedModifier` are NOT in this pattern. A full audit should grep for a bare `item:` prefix instead.
 
 Run:
 ```
-findstr /n "for i = 1, 4 do" 42\media\lua\client\ZFlexTooltip\ZFlexTooltip_Layout.lua
+findstr /n /c:"for i = 1, 4 do" 42\media\lua\client\ZFlexTooltip\ZFlexTooltip_Layout.lua
 ```
-Expected: **no output** (socket loop now iterates `activeParts`).
+Expected: **no output** (socket loop now iterates `activeParts`). Note: `/c:` forces the multi-word string to be treated as ONE literal including spaces — without it, `findstr` would split on spaces and match any line containing `do` or `for`, giving false positives.
 
 Run:
 ```
-findstr /n "return 24, width" 42\media\lua\client\ZFlexTooltip\ZFlexTooltip_Layout.lua
+findstr /n /c:"return 24, width" 42\media\lua\client\ZFlexTooltip\ZFlexTooltip_Layout.lua
 ```
 Expected: **no output** in Block_Tags (measure now returns computed height).
 
@@ -976,20 +1103,21 @@ function Caps.getWeight(item)
         return 0
     end
 
-    -- For containers, include the weight of contained items (B42).
+    -- For containers (bags/backpacks), add the weight of contained items (B42).
+    -- InventoryContainer.getInventory() returns the inner ItemContainer;
+    -- ItemContainer.getCapacityWeight() returns the summed weight of its contents.
+    -- (NOTE: an earlier draft used getWeightThen(), which does NOT exist in the
+    -- PZ B42 API. Review against the modding javadocs caught this. Do not reintroduce.)
     if Caps.hasMethod(item, "getInventory") then
         local inv = item:getInventory()
-        if inv then
-            if Caps.hasMethod(inv, "getWeightThen") then
-                baseWeight = baseWeight + (inv:getWeightThen() or 0)
-            elseif Caps.hasMethod(inv, "getCapacityWeight") then
-                baseWeight = baseWeight + (inv:getCapacityWeight() or 0)
-            end
+        if inv and Caps.hasMethod(inv, "getCapacityWeight") then
+            baseWeight = baseWeight + (inv:getCapacityWeight() or 0)
         end
     end
     return baseWeight
 end
 ```
+Sources: `zombie/inventory/types/InventoryContainer.html#getInventory()`, `zombie/inventory/ItemContainer.html#getCapacityWeight()` on the PZ modding javadocs.
 
 - [ ] **Step 2: Broaden supportsSockets to check getter presence (Cap3)**
 
@@ -1014,7 +1142,7 @@ function Caps.supportsSockets(item)
     return false
 end
 ```
-Note: `Block_Sockets:shouldRender` (Task 2 Step 7) already gates on `instanceof(item, "HandWeapon")` plus an active-part probe, so broadening here does not make melee weapons suddenly render a sockets block — it only makes the capability answer honest.
+Note: `Block_Sockets:shouldRender` (Task 2 Step 6) already gates on `instanceof(item, "HandWeapon")` plus an active-part probe, so broadening here does not make melee weapons suddenly render a sockets block — it only makes the capability answer honest.
 
 - [ ] **Step 3: Optional debug log in iterateTags (Cap1)**
 
@@ -1086,15 +1214,21 @@ end
 
 Run:
 ```
-findstr /n "isRanged() and item:isRanged" 42\media\lua\client\ZFlexTooltip\ZFlexTooltip_Capabilities.lua
+findstr /n /l /c:"isRanged() and item:isRanged" 42\media\lua\client\ZFlexTooltip\ZFlexTooltip_Capabilities.lua
 ```
-Expected: **no output**.
+Expected: **no output**. (`/c:` treats the multi-word string as one literal including spaces; `/l` forces literal mode so the `()` parens are not interpreted as regex.)
 
 Run:
 ```
-findstr /n "getInventory\|getWeightThen\|getCapacityWeight" 42\media\lua\client\ZFlexTooltip\ZFlexTooltip_Capabilities.lua
+findstr /n /c:"getWeightThen" 42\media\lua\client\ZFlexTooltip\ZFlexTooltip_Capabilities.lua
 ```
-Expected: 3+ matches (the new container-weight code).
+Expected: **no output** (the fictitious method is gone).
+
+Run:
+```
+findstr /n "getInventory getCapacityWeight" 42\media\lua\client\ZFlexTooltip\ZFlexTooltip_Capabilities.lua
+```
+Expected: 2 matches (the new container-weight code).
 
 - [ ] **Step 5: Commit**
 
@@ -1177,11 +1311,29 @@ This is a stretch goal. The bare minimum to satisfy Conf3 is to *define* the tok
 -- Defining the tokens here first lets new code reference them immediately.
 ```
 
+- [ ] **Step 4a: Extend getUIFont so the new Font tokens resolve correctly (Conf1 caveat, found in review)**
+
+Review noted: Step 3 adds `Tiny="NewSmall"`, `Subtitle="Breadcrumb"`, `Heading="Heading"` to `Config.Fonts`, but `getUIFont` in Layout.lua (lines 10-16) only resolves `Medium/Large/Code/Small` and falls back to `Small` for anything else. So the new tokens would silently render as `Small`. To make them effective, `getUIFont` must be extended. Since `getUIFont` lives in `ZFlexTooltip_Layout.lua` (Task 2's file), and Task 4 must stay scoped to `Config.lua`, this step is documented here but **executed as part of Task 2 Step 1** (the prep step, which already touches Layout's top section). Add the resolution to `getUIFont`:
+
+```lua
+local function getUIFont(fontToken)
+    local f = Config.Fonts[fontToken] or "Small"
+    if f == "Medium"    then return UIFont.Medium end
+    if f == "Large"     then return UIFont.Large end
+    if f == "Code"      then return UIFont.Code end
+    if f == "NewSmall"  then return UIFont.NewSmall end
+    if f == "Breadcrumb" then return UIFont.Breadcrumb end
+    if f == "Heading"   then return UIFont.Heading end
+    return UIFont.Small
+end
+```
+Cross-task note: if executing tasks in parallel, Task 4 Step 3 and Task 2 Step 1 must land before this takes effect. The fallback (`return UIFont.Small`) keeps behavior safe if only one of the two lands.
+
 - [ ] **Step 5: Static verification**
 
 Run:
 ```
-findstr /n "Config.Animation\|Config.BlockSizes" 42\media\lua\client\ZFlexTooltip\ZFlexTooltip_Config.lua
+findstr /n "Config.Animation Config.BlockSizes" 42\media\lua\client\ZFlexTooltip\ZFlexTooltip_Config.lua
 ```
 Expected: 2 matches (the two new blocks).
 
@@ -1216,21 +1368,20 @@ git rm "ClothingStats.lua"
 
 - [ ] **Step 2: Fix the README "For Modders" API (Doc)**
 
-The README claims `ZFlexTooltip.Layout.pipeline` exists and `table.insert(...pipeline, 1, block)` works. It does not — the pipeline is built locally inside `buildLayoutState` via `box:addBlock(...)`. Two options:
+The README claims `ZFlexTooltip.Layout.pipeline` exists and `table.insert(...pipeline, 1, block)` works. It does not — the pipeline is built locally inside `buildLayoutState` via `box:addBlock(...)`, and each `Layout.create*Block` factory returns exactly one block that `addBlock` inserts. Review confirmed that wrapping a factory to return a *different* block would **silently drop the original block** (e.g. the footer would disappear), so that naive pattern is wrong.
 
-**Option A (preferred): make the code match the doc.** Add a real extension point. In `ZFlexTooltip_Main.lua` this is out of scope for Task 5 (Main is Task 1's file). So instead **Option B: fix the doc to match the code.**
+The honest options are:
+- **Option A:** add a real multi-block extension point in `Main.lua` (out of scope here — Main is Task 1's file).
+- **Option B (chosen): fix the doc to show a correct composite-block pattern** that preserves the original block AND adds the custom one, by returning a block whose `:render()` delegates to the original and then draws the custom content.
 
-In `README.md`, replace the "For Modders" code block (lines 26-55) with a correct example that hooks `Events.OnGameBoot` and injects via the VBox factory pattern. Since `buildLayoutState` builds a fresh VBox each frame and there is no global registry, the honest path for a third-party block is to **wrap one of the existing creators**. Replace the block with:
+In `README.md`, replace the "For Modders" code block (lines 26-55) with:
 
 ```markdown
 ## 📚 For Modders
-ZFlexTooltip rebuilds its VBox layout every frame inside `buildLayoutState`. To inject a custom block, wrap one of the `Layout.create*Block` factories on game boot:
+ZFlexTooltip rebuilds its VBox layout every frame inside `buildLayoutState`. There is no global block registry yet, so to add a custom block you wrap one of the `Layout.create*Block` factories and return a **composite block** that renders the original content plus yours. Wrapping must preserve the original block — do not just return your own block or the original (e.g. the footer) will vanish.
 
 ```lua
 local ZFT_Layout = ZFlexTooltip.Layout
-
--- Save the original footer factory
-local origFooter = ZFT_Layout.createFooterBlock
 
 local MyCustomBlock = {}
 MyCustomBlock.__index = MyCustomBlock
@@ -1240,7 +1391,7 @@ function MyCustomBlock:shouldRender(item)
 end
 
 function MyCustomBlock:measure(item, width)
-    return 24, width
+    return 18, width
 end
 
 function MyCustomBlock:render(item, x, y, width, renderQueue)
@@ -1248,21 +1399,51 @@ function MyCustomBlock:render(item, x, y, width, renderQueue)
         type = "text",
         text = "My Cool Stat: " .. tostring(item:getModData().MyCoolStat),
         x = x, y = y,
-        color = { r = 1, g = 0.5, b = 0, a = 1 },
-        font = UIFont.Small
+        font = UIFont.Small,
+        r = 1, g = 0.5, b = 0, a = 1
     })
     return 18
 end
 
--- Replace the footer factory so our block is appended after it
+-- Wrap the footer factory with a COMPOSITE that keeps the footer and appends ours.
 Events.OnGameBoot.Add(function()
+    if not (ZFT_Layout and ZFT_Layout.createFooterBlock) then return end
+    local origCreateFooter = ZFT_Layout.createFooterBlock
     ZFT_Layout.createFooterBlock = function()
-        origFooter()  -- keep the original footer
-        return setmetatable({}, MyCustomBlock)
+        local footerBlock = origCreateFooter()
+        local customBlock = setmetatable({}, MyCustomBlock)
+        -- Composite block: delegate shouldRender/measure, and in render draw
+        -- the footer first then the custom block beneath it.
+        return {
+            shouldRender = function(self, item)
+                return footerBlock:shouldRender(item) or customBlock:shouldRender(item)
+            end,
+            measure = function(self, item, width)
+                local fh, fw = 0, width
+                local ch, cw = 0, width
+                if footerBlock:shouldRender(item) then fh, fw = footerBlock:measure(item, width) end
+                if customBlock:shouldRender(item)  then ch, cw = customBlock:measure(item, width)  end
+                return fh + ch, math.max(fw, cw)
+            end,
+            render = function(self, item, x, y, width, renderQueue)
+                local dy = 0
+                if footerBlock:shouldRender(item) then
+                    dy = footerBlock:render(item, x, y, width, renderQueue)
+                end
+                if customBlock:shouldRender(item) then
+                    dy = dy + customBlock:render(item, x, y + dy, width, renderQueue)
+                end
+                return dy
+            end
+        }
     end
 end)
 ```
+
+Note for modders: the composite must report a `measure` height equal to the sum of its parts, and its `render` must stack the sub-blocks vertically and return the total height — otherwise the VBox layout will mis-size the tooltip.
 ```
+
+This preserves the footer (the original block is still created and rendered) while appending the custom block. Review flagged that the previous example dropped the footer; this version fixes that.
 
 Also remove the false compatibility claims that have no test backing. In `README.md`, soften lines 12-18 from definitive ("✅ Flawless integration") to aspirational:
 
