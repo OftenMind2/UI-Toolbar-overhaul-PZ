@@ -12,6 +12,27 @@ Config.Grid = {
     LineGap = 4
 }
 
+-- 1b. Animation tokens
+Config.Animation = {
+    SlidePixels = 20,    -- vertical slide-in distance in px
+    DurationMs = 120.0,  -- slide+fade duration in milliseconds
+}
+
+-- 1c. Per-block sizing tokens (replaces magic numbers scattered in Layout)
+-- NOTE: Layout currently uses literal numbers; migrate incrementally.
+-- Defining the tokens here first lets new code reference them immediately.
+Config.BlockSizes = {
+    Header       = 54,
+    HeroStat     = 36,
+    ProgressBar  = 22,
+    FluidFlask   = 30,
+    SocketSlot   = 28,
+    SocketGap    = 4,
+    TagRow       = 16,
+    TagGap       = 4,
+    ClothingRow  = 18,
+}
+
 -- 2. Semantic Color Palette (0.0 to 1.0 floats for PZ API)
 Config.Colors = {
     BgBase = { r = 0.05, g = 0.06, b = 0.08, a = 0.95 }, -- Deep obsidian/navy
@@ -42,10 +63,15 @@ Config.RarityColors = {
 
 -- 4. Font tokens mapped to PZ fonts (UIFont is a global enum in PZ)
 Config.Fonts = {
-    Title = "Medium",  -- Will map to UIFont.Medium
-    Text = "Small",    -- Will map to UIFont.Small
-    Value = "Code",    -- Will map to UIFont.Code
-    Hero = "Large"     -- Will map to UIFont.Large
+    Title    = "Medium",  -- maps to UIFont.Medium
+    Text     = "Small",   -- maps to UIFont.Small
+    Value    = "Code",    -- maps to UIFont.Code
+    Hero     = "Large",   -- maps to UIFont.Large
+    -- Extended (resolved by getUIFont in Layout; listed here so Layout can be
+    -- extended without touching Config):
+    Tiny     = "NewSmall",
+    Subtitle = "Breadcrumb",
+    Heading  = "Heading",
 }
 
 -- Fallback categories if getCategory() is not clear
