@@ -1,4 +1,4 @@
-version=1
+version=1.1.0
 id=ZFlexTooltip
 title=ZFlex Tooltip (B42)
 tags=Interface,Framework,QoL
@@ -6,8 +6,8 @@ description=A modern, modular, and universally compatible UI framework that repl
 
 [b]Features:[/b]
 * [b]Tactical PDA Aesthetic:[/b] Smooth slide-in animations, dynamic measurements, and an immersive dark-obsidian background.
-* [b]100% Crash-Proof:[/b] Safe capability checks ensure that crazy modded items will never crash your UI.
+* [b]Crash-Resistant:[/b] Item data is read via reflection (capability checks), so modded items that are missing expected methods degrade gracefully instead of throwing Java exceptions.
 * [b]Universal Context Wrapping:[/b] Applies seamlessly to Inventory, Crafting, Vehicles, and World Objects.
-* [b]Flawless Compatibility:[/b] Works natively alongside Inventory Tetris, Equipment UI, Brita's Weapon Pack, KI5 Vehicles, and TooltipLib!
+* [b]Compatibility:[/b] Coexists with Inventory Tetris, Equipment UI, Brita's Weapon Pack, KI5 Vehicles, and TooltipLib without hardcoded patches.
 
 Made for Build 42.
