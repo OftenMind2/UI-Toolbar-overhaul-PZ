@@ -57,7 +57,8 @@ end
 
 function Caps.iterateTags(tags, callback)
     if not tags then return end
-    
+    local consumed = false
+
     -- List/ArrayList
     if Caps.hasMethod(tags, "size") and Caps.hasMethod(tags, "get") then
         local ok = pcall(function()
@@ -65,11 +66,11 @@ function Caps.iterateTags(tags, callback)
                 callback(tags:get(i))
             end
         end)
-        if ok then return end
+        if ok then consumed = true end
     end
-    
+
     -- Set/HashSet
-    if Caps.hasMethod(tags, "iterator") then
+    if not consumed and Caps.hasMethod(tags, "iterator") then
         local ok = pcall(function()
             local it = tags:iterator()
             while it and Caps.hasMethod(it, "hasNext") and it:hasNext() do
@@ -78,13 +79,26 @@ function Caps.iterateTags(tags, callback)
                 end
             end
         end)
-        if ok then return end
+        if ok then consumed = true end
+    end
+
+    if not consumed and ZFlexTooltip and ZFlexTooltip.Debug then
+        print("ZFlexTooltip: iterateTags could not iterate a tags object of type " .. type(tags))
     end
 end
 
 -- 4. Capability: Weapon Sockets (Attachments)
 function Caps.supportsSockets(item)
-    return Caps.hasMethod(item, "isRanged") and item:isRanged()
+    if not item then return false end
+    -- Ranged weapons always have attachment slots.
+    if Caps.hasMethod(item, "isRanged") and item:isRanged() then return true end
+    -- Some B42 mods add attachment slots to melee items: treat any known
+    -- attachment getter as evidence of socket support.
+    local socketGetters = { "getScope", "getSling", "getCanon", "getClip", "getRecoilpad", "getStock" }
+    for _, m in ipairs(socketGetters) do
+        if Caps.hasMethod(item, m) then return true end
+    end
+    return false
 end
 
 function Caps.getSockets(item)
@@ -107,10 +121,24 @@ function Caps.supportsWeight(item)
 end
 
 function Caps.getWeight(item)
+    if not item then return 0 end
+    local baseWeight
     if Caps.hasMethod(item, "getActualWeight") then
-        return item:getActualWeight()
+        baseWeight = item:getActualWeight()
     elseif Caps.hasMethod(item, "getWeight") then
-        return item:getWeight()
+        baseWeight = item:getWeight()
+    else
+        return 0
     end
-    return 0
+
+    -- For containers (bags/backpacks), add the weight of contained items (B42).
+    -- InventoryContainer.getInventory() returns the inner ItemContainer;
+    -- ItemContainer.getCapacityWeight() returns the summed weight of its contents.
+    if Caps.hasMethod(item, "getInventory") then
+        local inv = item:getInventory()
+        if inv and Caps.hasMethod(inv, "getCapacityWeight") then
+            baseWeight = baseWeight + (inv:getCapacityWeight() or 0)
+        end
+    end
+    return baseWeight
 end
