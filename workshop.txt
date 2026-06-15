@@ -1,0 +1,13 @@
+version=1
+id=ZFlexTooltip
+title=ZFlex Tooltip (B42)
+tags=Interface,Framework,QoL
+description=A modern, modular, and universally compatible UI framework that replaces the standard Project Zomboid tooltips with a sleek Tactical PDA aesthetic.
+
+[b]Features:[/b]
+* [b]Tactical PDA Aesthetic:[/b] Smooth slide-in animations, dynamic measurements, and an immersive dark-obsidian background.
+* [b]100% Crash-Proof:[/b] Safe capability checks ensure that crazy modded items will never crash your UI.
+* [b]Universal Context Wrapping:[/b] Applies seamlessly to Inventory, Crafting, Vehicles, and World Objects.
+* [b]Flawless Compatibility:[/b] Works natively alongside Inventory Tetris, Equipment UI, Brita's Weapon Pack, KI5 Vehicles, and TooltipLib!
+
+Made for Build 42.

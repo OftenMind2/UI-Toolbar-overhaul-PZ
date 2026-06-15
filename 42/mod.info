@@ -1,0 +1,6 @@
+name=Z-Flex Tooltip
+poster=../poster.png
+id=ZFlexTooltip
+description=Modern tactical PDA style tooltip overhaul for Build 42.19.
+pzversion=42
+versionMin=42.0.0

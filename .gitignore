@@ -1,0 +1,19 @@
+# PZ mod build artifacts
+*.bak
+*.tmp
+*.log
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# ZCode orchestrator artifacts (if this repo is nested)
+.agents/
+scratch/
