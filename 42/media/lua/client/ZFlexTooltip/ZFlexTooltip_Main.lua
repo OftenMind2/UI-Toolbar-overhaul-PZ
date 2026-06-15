@@ -4,7 +4,7 @@ require "ZFlexTooltip/ZFlexTooltip_Layout"
 
 ZFlexTooltip = ZFlexTooltip or {}
 ZFlexTooltip.active = true
-ZFlexTooltip.CapturedDrawCalls = ZFlexTooltip.CapturedDrawCalls or {}
+ZFlexTooltip.Debug = false  -- Set true to re-enable diagnostic prints
 ZFlexTooltip.RenderQueue = ZFlexTooltip.RenderQueue or {}
 
 local Config = ZFlexTooltip.Config
@@ -57,7 +57,6 @@ local function buildLayoutState(self, item)
     box:addBlock(Layout.createClothingStatsBlock())
     box:addBlock(Layout.createTagsBlock())
     box:addBlock(Layout.createAttachmentSystemBlock())
-    box:addBlock(Layout.createLegacyModBlock())
     box:addBlock(Layout.createFooterBlock())
 
     -- Pass 1: Measure
@@ -76,14 +75,14 @@ end
 -- CORE TOOLTIP RENDER & PRERENDER FUNCTIONS
 ----------------------------------------------------
 function ZFlexTooltip.prerender(self)
-    print("ZFLEXTOOLTIP: PRERENDER IS CALLED")
+    if ZFlexTooltip.Debug then print("ZFLEXTOOLTIP: PRERENDER IS CALLED") end
     -- Hide tooltip if context menu is active or during DragAndDrop (Equipment UI / Tetris compatibility)
-    if ISContextMenu and ISContextMenu.instance and ISContextMenu.instance.visibleCheck then return end
+    if ISContextMenu and ISContextMenu.instance and type(ISContextMenu.instance.visibleCheck) ~= "nil" and ISContextMenu.instance.visibleCheck then return end
     if DragAndDrop and type(DragAndDrop.getDraggedItem) == "function" then
         local ok, dragged = pcall(DragAndDrop.getDraggedItem)
         if ok and dragged then return end
     end
-    
+
     -- Temporarily disable drawRect and drawRectBorder to prevent the vanilla background from flashing
     local origRect = self.drawRect
     local origRectBorder = self.drawRectBorder
@@ -107,16 +106,10 @@ function ZFlexTooltip.prerender(self)
     -- Run position constraints and clamping to screen boundaries
     local mx = getMouseX() + 24
     local my = getMouseY() + 24
-    
-    -- Proper Controller/Joypad support & static anchoring
-    if self.joyfocus then
-        mx = self:getX()
-        my = self:getY()
-        if self.anchorBottomLeft then
-            mx = self.anchorBottomLeft.x
-            my = self.anchorBottomLeft.y
-        end
-    elseif not self.followMouse then
+
+    -- Proper Controller/Joypad support & static anchoring.
+    -- joyfocus (controller) and non-following-mouse tooltips use the same anchoring logic.
+    if self.joyfocus or not self.followMouse then
         mx = self:getX()
         my = self:getY()
         if self.anchorBottomLeft then
@@ -135,52 +128,51 @@ function ZFlexTooltip.prerender(self)
     -- Force round coordinates to prevent pixel jittering
     local newX = math.floor(math.max(0, math.min(mx, maxX - w - 1)))
     local newY = math.floor(math.max(0, math.min(my, maxY - h - 1)))
-    
+
     if (not self.followMouse or self.joyfocus) and self.anchorBottomLeft then
         newY = math.floor(math.max(0, math.min(my - h, maxY - h - 1)))
     end
-    
+
     self:setX(newX)
     self:setY(newY)
 end
 
 function ZFlexTooltip.render(self)
-    print("ZFLEXTOOLTIP: RENDER IS CALLED FOR " .. tostring(self.item and self.item:getName() or "NIL"))
+    if ZFlexTooltip.Debug then print("ZFLEXTOOLTIP: RENDER IS CALLED FOR " .. tostring(self.item and self.item:getName() or "NIL")) end
     if not self.item then return end
-    
+
     -- Hide tooltip if context menu is active or during DragAndDrop (Equipment UI / Tetris compatibility)
-    if ISContextMenu and ISContextMenu.instance and ISContextMenu.instance.visibleCheck then return end
+    if ISContextMenu and ISContextMenu.instance and type(ISContextMenu.instance.visibleCheck) ~= "nil" and ISContextMenu.instance.visibleCheck then return end
     if DragAndDrop and type(DragAndDrop.getDraggedItem) == "function" then
         local ok, dragged = pcall(DragAndDrop.getDraggedItem)
         if ok and dragged then return end
     end
-    
+
     self.zflexActive = true
     -- Animation State Updates
     local currentItemId = self.item:getID()
     local time = getTimeInMillis()
-    
+
     self.zflex_AnimState = self.zflex_AnimState or { itemId = nil, startTime = 0, fade = 0.0, slideY = 0 }
-    
+
+    local animCfg = Config.Animation or {}
     if self.zflex_AnimState.itemId ~= currentItemId then
         self.zflex_AnimState.itemId = currentItemId
         self.zflex_AnimState.startTime = time
         self.zflex_AnimState.fade = 0.0
-        self.zflex_AnimState.slideY = 20
+        self.zflex_AnimState.slideY = animCfg.SlidePixels or 20
     end
-    
-    local animProgress = math.min(1.0, (time - self.zflex_AnimState.startTime) / 120.0)
+
+    local animProgress = math.min(1.0, (time - self.zflex_AnimState.startTime) / (animCfg.DurationMs or 120.0))
     -- Ease out quad
     local easeOut = animProgress * (2 - animProgress)
     self.zflex_AnimState.fade = easeOut
-    self.zflex_AnimState.slideY = math.floor(20 * (1 - easeOut))
+    self.zflex_AnimState.slideY = math.floor((animCfg.SlidePixels or 20) * (1 - easeOut))
 
-    -- Build layout state safely
+    -- Build layout state safely (also sets self:setWidth/setHeight via prerender cache)
     local w, h = buildLayoutState(self, self.item)
     if not w then return end
 
-    local w = self:getWidth()
-    local h = self:getHeight()
     local renderYOffset = self.zflex_AnimState.slideY
 
     -- IMPORTANT: Sync native tooltip height so TooltipLib knows where our custom box ends!
@@ -192,11 +184,11 @@ function ZFlexTooltip.render(self)
     -- 1. Draw Custom background Card (Tactical PDA Base)
     local bg = Config.Colors.BgBase
     local border = Config.Colors.BorderBase
-    
+
     -- Apply global alpha fade
     local baseAlpha = bg.a * self.zflex_AnimState.fade
     local borderAlpha = border.a * self.zflex_AnimState.fade
-    
+
     self:drawRect(0, renderYOffset, w, h, baseAlpha, bg.r, bg.g, bg.b)
     self:drawRectBorder(0, renderYOffset, w, h, borderAlpha, border.r, border.g, border.b)
 
@@ -214,8 +206,8 @@ function ZFlexTooltip.render(self)
             self:drawRectBorder(cmd.x, drawY, cmd.w, cmd.h, cmd.color.a * self.zflex_AnimState.fade, cmd.color.r, cmd.color.g, cmd.color.b)
         end
     end
-    print("ZFLEXTOOLTIP: RENDER SUCCESS")
-    
+    if ZFlexTooltip.Debug then print("ZFLEXTOOLTIP: RENDER SUCCESS") end
+
     -- =========================================================================
     -- TOOLTIPLIB DEFERRED MODE TRICK:
     -- We want TooltipLib to draw its stats at the bottom of our PDA.
@@ -224,15 +216,18 @@ function ZFlexTooltip.render(self)
     -- If it's true, they abort drawing completely. TooltipLib does NOT check this.
     -- So we set it to true, call TooltipLib, and it enters Deferred Mode perfectly!
     -- =========================================================================
-    local contextWasVisible = nil
-    local createdDummyContext = false
-    
+    -- Reentrancy-safe: we snapshot the *reference* (not just the field) so that if
+    -- originalRender opens/closes a real menu mid-swap, we don't clobber it.
+    local prevInstance = ISContextMenu and ISContextMenu.instance or nil
+    local prevVisibleCheck = nil
+    local injectedDummy = false
+
     if ISContextMenu then
         if not ISContextMenu.instance then
             ISContextMenu.instance = { visibleCheck = true }
-            createdDummyContext = true
+            injectedDummy = true
         else
-            contextWasVisible = ISContextMenu.instance.visibleCheck
+            prevVisibleCheck = ISContextMenu.instance.visibleCheck
             ISContextMenu.instance.visibleCheck = true
         end
     end
@@ -242,10 +237,12 @@ function ZFlexTooltip.render(self)
     end
 
     if ISContextMenu then
-        if createdDummyContext then
+        -- Only restore if the instance reference is still the one we set.
+        -- If a mod replaced it mid-render, leave that mod's state alone.
+        if injectedDummy and ISContextMenu.instance == prevInstance then
             ISContextMenu.instance = nil
-        elseif contextWasVisible ~= nil then
-            ISContextMenu.instance.visibleCheck = contextWasVisible
+        elseif (not injectedDummy) and ISContextMenu.instance == prevInstance and prevVisibleCheck ~= nil then
+            ISContextMenu.instance.visibleCheck = prevVisibleCheck
         end
     end
 end
